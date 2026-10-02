@@ -9,12 +9,12 @@ jobs:
     steps:
       - name: Checkout Repository
         uses: actions/checkout@v4
-
       - name: Configure macOS User & Screen Sharing
         run: |
           echo "=== Настройка учетной записи пользователя ==="
-          # Меняем системный пароль пользователя 'runner'
-          sudo dscl . -passwd /Users/runner "${{ secrets.VNC_USER_PASSWORD }}"
+          # ИСПРАВЛЕНО: Используем sysadminctl вместо dscl, чтобы обойти требование старого пароля
+          sudo sysadminctl -deleteUserPassword runner || true
+          sudo sysadminctl -resetPasswordFor runner -newPassword "${{ secrets.VNC_USER_PASSWORD }}"
           
           echo "=== Включение службы Screen Sharing ==="
           # Активируем встроенный VNC в macOS 15
@@ -25,6 +25,7 @@ jobs:
             -activate -configure -access -on \
             -clientopts -setvncpassword -vncpassword "${{ secrets.VNC_PASSWORD }}" \
             -restart -agent -privs -all
+            
 
       - name: Fix Black Screen & Optimize Resolution
         run: |
