@@ -1,22 +1,65 @@
-name: mac
-on: 
-  workflow_dispatch:
-defaults:
-  run:
-    shell: bash
+name: Remote macOS 15 VNC
+
+on:
+  workflow_dispatch: # Запуск вручную кнопкой
 
 jobs:
-  build:
-    runs-on: macos-11
+  connect-mac:
+    runs-on: macos-15 # Используем актуальную macOS 15 Sequoia
     steps:
-    - uses: actions/checkout@v2
-    - name: Setting the environment up.
-      env:
-        NGROK_AUTH_TOKEN: ${{ secrets.NGROK_AUTH_TOKEN }}
-        VNC_USER_PASSWORD: ${{ secrets.VNC_USER_PASSWORD }}
-        VNC_PASSWORD: ${{ secrets.VNC_PASSWORD }}
-      run: source configure.sh "$VNC_USER_PASSWORD" "$VNC_PASSWORD" "$NGROK_AUTH_TOKEN"
-    - name: ngrok is now listening to VNC connections on...
-      run: curl --silent http://127.0.0.1:4040/api/tunnels | jq '.tunnels[0].public_url'
-    - name: Setup tmate session
-      uses: mxschmitt/action-tmate@v2
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Configure macOS User & Screen Sharing
+        run: |
+          echo "=== Настройка учетной записи пользователя ==="
+          # Меняем системный пароль пользователя 'runner'
+          sudo dscl . -passwd /Users/runner "${{ secrets.VNC_USER_PASSWORD }}"
+          
+          echo "=== Включение службы Screen Sharing ==="
+          # Активируем встроенный VNC в macOS 15
+          sudo launchctl load -w /System/Library/LaunchDaemons/com.apple.screensharing.plist
+          
+          # Настраиваем агент удаленного управления и задаем пароль для VNC
+          sudo /System/Library/CoreServices/RemoteManagement/ARDAgent.app/Contents/Resources/kickstart \
+            -activate -configure -access -on \
+            -clientopts -setvncpassword -vncpassword "${{ secrets.VNC_PASSWORD }}" \
+            -restart -agent -privs -all
+
+      - name: Fix Black Screen & Optimize Resolution
+        run: |
+          echo "=== Настройка графического вывода для VNC ==="
+          # Чтобы экран не был черным, принудительно перезапускаем окно входа в графический интерфейс
+          sudo killall loginwindow
+          
+          # Даем системе 5 секунд на перезапуск графической оболочки
+          sleep 5
+          
+          # Устанавливаем FullHD разрешение через утилиту displayplacer (ставим ее, если нет)
+          brew install displayplacer || true
+          displayplacer "res:1920x1080" || echo "Используем разрешение по умолчанию"
+
+      - name: Install and Setup ngrok
+        run: |
+          echo "=== Установка ngrok ==="
+          brew install ngrok
+          
+          echo "=== Авторизация в ngrok ==="
+          ngrok config add-authtoken "${{ secrets.NGROK_AUTH_TOKEN }}"
+
+      - name: Start ngrok Tunnel & Output Connection String
+        run: |
+          echo "=== Запуск туннеля на порт VNC (5900) ==="
+          # Запускаем туннель ngrok в фоне
+          ngrok tcp 5900 --log=stdout &
+          
+          # Ждем поднятия туннеля
+          sleep 5
+          
+          echo "=== ССЫЛКА ДЛЯ ПОДКЛЮЧЕНИЯ ==="
+          # ИСПРАВЛЕНО: Запрашиваем ссылку у правильного локального адреса API ngrok
+          curl --silent http://127.0.0.1:4040 | grep -o 'tcp://[^"]*'
+          echo "==============================="
+          
+          # Удерживаем раннер активным 5 часов
+          sleep 18000
