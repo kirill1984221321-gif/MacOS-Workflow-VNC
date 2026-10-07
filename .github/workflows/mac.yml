@@ -1,7 +1,7 @@
 name: Private macOS GUI via Tailscale AuthKey
 
 on: 
-  workflow_dispatch: # Позволяет запускать вручную кнопкой на GitHub
+  workflow_dispatch:
 
 jobs:
   macos-gui:
@@ -11,31 +11,43 @@ jobs:
       - name: Checkout Repository
         uses: actions/checkout@v4
 
-      # 1. Подключаемся к Tailscale с помощью вашего Auth Key
+      # 1. Подключаемся к Tailscale
       - name: Connect to Tailscale
         uses: tailscale/github-action@v3
         with:
           authkey: ${{ secrets.TAILSCALE_AUTH_KEY }}
 
-      # 2. Создаем нового пользователя и включаем VNC (Screen Sharing)
-      - name: Create VNC User and Enable Screen Sharing
+      # 2. Настраиваем пользователя, автологин и графику
+      - name: Configure macOS Desktop and VNC
         run: |
-          # 1. Создаем нового администратора 'vncuser' с паролем 'MacOsPassword123'
-          # Это гарантирует, что у учетной записи точно будет рабочий и известный нам пароль
+          # Создаем администратора 'vncuser'
           sudo sysadminctl -addUser vncuser -fullName "VNC User" -password "MacOsPassword123" -admin
 
-          # 2. Разрешаем запуск службы VNC на консоли общего экрана
-          sudo defaults write /Library/Preferences/com.apple.RemoteManagement VNCAlwaysStartOnConsole -bool true
+          # Включаем автоматический вход в систему для vncuser, чтобы рабочий стол грузился сам
+          sudo defaults write /Library/Preferences/com.apple.loginwindow AutoLoginUser -string "vncuser"
           
-          # 3. Активируем встроенный в macOS ARDAgent с поддержкой классического VNC
-          # Прописываем пароль 'MacOsPassword123' для самого VNC-протокола
+          # Генерируем хэш пароля для автологина (требование безопасности macOS)
+          echo "MacOsPassword123" | sudo tee /etc/kcpassword > /dev/null
+
+          # Отключаем режим сна дисплея и заставки
+          sudo pmset -a displaysleep 0 disksleep 0 sleep 0 suppressesassp 1
+          defaults write com.apple.screensaver idleTime 0
+
+          # Принудительно задаем виртуальное разрешение (1280x800, чтобы не перегружать сеть)
+          sudo defaults write /Library/Preferences/com.apple.windowserver.plist DisplayResolutionEnabled -bool true
+
+          # Активируем службу удаленного управления VNC
+          sudo defaults write /Library/Preferences/com.apple.RemoteManagement VNCAlwaysStartOnConsole -bool true
           sudo /System/Library/CoreServices/RemoteManagement/ARDAgent.app/Contents/Resources/kickstart \
             -activate -configure -access -on \
             -clientopts -setvnclegacy -vnclegacy yes \
             -clientopts -setvncpw -vncpw MacOsPassword123 \
             -restart -agent -privs -all
 
-      # 3. Выводим IP-адрес и удерживаем виртуалку активной
+          # Перезапускаем графический интерфейс, чтобы применить автологин и настройки дисплея
+          sudo killall WindowServer || true
+
+      # 3. Удерживаем сессию активной
       - name: Keep Alive and Display IP
         run: |
           echo "===================================================="
@@ -48,6 +60,4 @@ jobs:
           echo "Пароль: MacOsPassword123"
           echo "===================================================="
           
-          # Удерживаем сессию открытой 5.5 часов
           sleep 19800
-          
