@@ -17,20 +17,22 @@ jobs:
         with:
           authkey: ${{ secrets.TAILSCALE_AUTH_KEY }}
 
-      # 2. Настраиваем и включаем встроенный в macOS VNC (Screen Sharing)
-      - name: Enable macOS Screen Sharing (VNC)
+      # 2. Создаем нового пользователя и включаем VNC (Screen Sharing)
+      - name: Create VNC User and Enable Screen Sharing
         run: |
-          # Устанавливаем пароль для стандартного пользователя 'runner'
-          sudo dscl . -passwd /Users/runner VncPassword123
+          # 1. Создаем нового администратора 'vncuser' с паролем 'MacOsPassword123'
+          # Это гарантирует, что у учетной записи точно будет рабочий и известный нам пароль
+          sudo sysadminctl -addUser vncuser -fullName "VNC User" -password "MacOsPassword123" -admin
 
-          # Разрешаем запуск службы VNC на консоли общего экрана
+          # 2. Разрешаем запуск службы VNC на консоли общего экрана
           sudo defaults write /Library/Preferences/com.apple.RemoteManagement VNCAlwaysStartOnConsole -bool true
           
-          # Активируем встроенный в macOS ARDAgent с поддержкой классического VNC
+          # 3. Активируем встроенный в macOS ARDAgent с поддержкой классического VNC
+          # Прописываем пароль 'MacOsPassword123' для самого VNC-протокола
           sudo /System/Library/CoreServices/RemoteManagement/ARDAgent.app/Contents/Resources/kickstart \
             -activate -configure -access -on \
             -clientopts -setvnclegacy -vnclegacy yes \
-            -clientopts -setvncpw -vncpw VncPassword123 \
+            -clientopts -setvncpw -vncpw MacOsPassword123 \
             -restart -agent -privs -all
 
       # 3. Выводим IP-адрес и удерживаем виртуалку активной
@@ -40,10 +42,12 @@ jobs:
           echo "Виртуальная машина успешно подключена к Tailscale!"
           echo "Ваш IP в сети Tailscale:"
           tailscale ip -4
-          echo "Логин для подключения к VNC: runner"
-          echo "Пароль для подключения к VNC: VncPassword123"
+          echo "----------------------------------------------------"
+          echo "ДАННЫЕ ДЛЯ ПОДКЛЮЧЕНИЯ К VNC:"
+          echo "Логин: vncuser"
+          echo "Пароль: MacOsPassword123"
           echo "===================================================="
           
-          # Удерживаем сессию открытой (примерно 5.5 часов)
+          # Удерживаем сессию открытой 5.5 часов
           sleep 19800
           
