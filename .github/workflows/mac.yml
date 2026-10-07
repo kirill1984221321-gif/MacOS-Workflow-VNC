@@ -1,66 +1,49 @@
-name: Remote macOS 15 VNC
+name: Private macOS GUI via Tailscale AuthKey
 
-on:
-  workflow_dispatch: # Запуск вручную кнопкой
+on: 
+  workflow_dispatch: # Позволяет запускать вручную кнопкой на GitHub
 
 jobs:
-  connect-mac:
-    runs-on: macos-15 # Используем актуальную macOS 15 Sequoia
+  macos-gui:
+    runs-on: macos-latest
+
     steps:
       - name: Checkout Repository
         uses: actions/checkout@v4
-      - name: Configure macOS User & Screen Sharing
+
+      # 1. Подключаемся к Tailscale с помощью вашего Auth Key
+      - name: Connect to Tailscale
+        uses: tailscale/github-action@v3
+        with:
+          authkey: ${{ secrets.TAILSCALE_AUTH_KEY }}
+
+      # 2. Настраиваем и включаем встроенный в macOS VNC (Screen Sharing)
+      - name: Enable macOS Screen Sharing (VNC)
         run: |
-          echo "=== Настройка учетной записи пользователя ==="
-          # ИСПРАВЛЕНО: Используем sysadminctl вместо dscl, чтобы обойти требование старого пароля
-          sudo sysadminctl -deleteUserPassword runner || true
-          sudo sysadminctl -resetPasswordFor runner -newPassword "${{ secrets.VNC_USER_PASSWORD }}"
+          # Устанавливаем пароль для стандартного пользователя 'runner'
+          sudo dscl . -passwd /Users/runner VncPassword123
+
+          # Разрешаем запуск службы VNC на консоли общего экрана
+          sudo defaults write /Library/Preferences/com.apple.RemoteManagement VNCAlwaysStartOnConsole -bool true
           
-          echo "=== Включение службы Screen Sharing ==="
-          # Активируем встроенный VNC в macOS 15
-          sudo launchctl load -w /System/Library/LaunchDaemons/com.apple.screensharing.plist
-          
-          # Настраиваем агент удаленного управления и задаем пароль для VNC
+          # Активируем встроенный в macOS ARDAgent с поддержкой классического VNC
           sudo /System/Library/CoreServices/RemoteManagement/ARDAgent.app/Contents/Resources/kickstart \
             -activate -configure -access -on \
-            -clientopts -setvncpassword -vncpassword "${{ secrets.VNC_PASSWORD }}" \
+            -clientopts -setvnclegacy -vnclegacy yes \
+            -clientopts -setvncpw -vncpw VncPassword123 \
             -restart -agent -privs -all
-            
 
-      - name: Fix Black Screen & Optimize Resolution
+      # 3. Выводим IP-адрес и удерживаем виртуалку активной
+      - name: Keep Alive and Display IP
         run: |
-          echo "=== Настройка графического вывода для VNC ==="
-          # Чтобы экран не был черным, принудительно перезапускаем окно входа в графический интерфейс
-          sudo killall loginwindow
+          echo "===================================================="
+          echo "Виртуальная машина успешно подключена к Tailscale!"
+          echo "Ваш IP в сети Tailscale:"
+          tailscale ip -4
+          echo "Логин для подключения к VNC: runner"
+          echo "Пароль для подключения к VNC: VncPassword123"
+          echo "===================================================="
           
-          # Даем системе 5 секунд на перезапуск графической оболочки
-          sleep 5
+          # Удерживаем сессию открытой (примерно 5.5 часов)
+          sleep 19800
           
-          # Устанавливаем FullHD разрешение через утилиту displayplacer (ставим ее, если нет)
-          brew install displayplacer || true
-          displayplacer "res:1920x1080" || echo "Используем разрешение по умолчанию"
-
-      - name: Install and Setup ngrok
-        run: |
-          echo "=== Установка ngrok ==="
-          brew install ngrok
-          
-          echo "=== Авторизация в ngrok ==="
-          ngrok config add-authtoken "${{ secrets.NGROK_AUTH_TOKEN }}"
-
-      - name: Start ngrok Tunnel & Output Connection String
-        run: |
-          echo "=== Запуск туннеля на порт VNC (5900) ==="
-          # Запускаем туннель ngrok в фоне
-          ngrok tcp 5900 --log=stdout &
-          
-          # Ждем поднятия туннеля
-          sleep 5
-          
-          echo "=== ССЫЛКА ДЛЯ ПОДКЛЮЧЕНИЯ ==="
-          # ИСПРАВЛЕНО: Запрашиваем ссылку у правильного локального адреса API ngrok
-          curl --silent http://127.0.0.1:4040 | grep -o 'tcp://[^"]*'
-          echo "==============================="
-          
-          # Удерживаем раннер активным 5 часов
-          sleep 18000
