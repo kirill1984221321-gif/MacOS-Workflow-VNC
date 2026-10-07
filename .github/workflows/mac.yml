@@ -11,33 +11,43 @@ jobs:
       - name: Checkout Repository
         uses: actions/checkout@v4
 
-      # Шаг 1: Подключаемся к вашей сети Tailscale
+      # ============================================================
+      # Шаг 1: Подключаемся к сети Tailscale
+      # ============================================================
       - name: Connect to Tailscale
         uses: tailscale/github-action@v3
         with:
           authkey: ${{ secrets.TAILSCALE_AUTH_KEY }}
 
-      # Шаг 2: Настраиваем SSH через sysadminctl (Вариант B)
+      # ============================================================
+      # Шаг 2: SSH-доступ (Вариант B — sysadminctl)
+      # ============================================================
       - name: Configure SSH Access
         run: |
-          echo "=== Включаем SSH ==="
-          sudo systemsetup -setremotelogin on
+          echo "=== Включаем Remote Login (SSH) ==="
+          sudo systemsetup -setremotelogin on || true
 
-          echo "=== Сбрасываем пароль runner через sysadminctl ==="
-          sudo sysadminctl -resetPasswordFor runner -newPassword RunnerPass123
+          echo "=== Сбрасываем пароль пользователя runner ==="
+          sudo sysadminctl -resetPasswordFor runner -newPassword RunnerPass123 || \
+            sudo dscl . -passwd /Users/runner '' RunnerPass123 || \
+            echo "ВНИМАНИЕ: сброс пароля не удался — используйте SSH-ключ"
 
-          echo "=== Проверяем, что пользователь существует ==="
-          id runner
+          echo "=== Проверяем пользователя ==="
+          id runner || true
 
-          echo "=== SSH настроен. Логин: runner, Пароль: RunnerPass123 ==="
+          echo "=== SSH готов. Логин: runner, Пароль: RunnerPass123 ==="
 
-      # Шаг 3: Принудительно запускаем графическую сессию
+      # ============================================================
+      # Шаг 3: Настройка графической сессии (БЕЗ killall WindowServer!)
+      # ============================================================
       - name: Force GUI Session for VNC
         run: |
-          echo "=== Отключаем блокировку экрана и сон ==="
+          echo "=== Отключаем блокировку экрана ==="
           sudo defaults write /Library/Preferences/com.apple.screensaver askForPassword -int 0
           sudo defaults write /Library/Preferences/com.apple.screensaver askForPasswordDelay -int 0
-          sudo pmset -a displaysleep 0 sleep 0 disablesleep 1
+
+          echo "=== Отключаем сон дисплея и системы ==="
+          sudo pmset -a displaysleep 0 sleep 0 disablesleep 1 || true
 
           echo "=== Включаем автологин для runner ==="
           sudo defaults write /Library/Preferences/com.apple.loginwindow autoLoginUser runner
@@ -46,39 +56,55 @@ jobs:
           echo "=== VNC всегда стартует на консоли ==="
           sudo defaults write /Library/Preferences/com.apple.RemoteManagement VNCAlwaysStartOnConsole -bool true
 
-          echo "=== Перезапускаем WindowServer (мягко) ==="
-          sudo killall -HUP WindowServer || true
-          sleep 15
+          echo "=== Активация виртуального дисплея ==="
+          sudo defaults write /Library/Preferences/com.apple.windowserver.plist DisplayResolutionEnabled -bool true
+          sudo defaults write /Library/Preferences/com.apple.windowserver.plist DisplayResolutionAlwaysEnabled -bool true
 
-          echo "=== caffeinate против засыпания дисплея ==="
+          echo "=== Запускаем caffeinate против засыпания ==="
           nohup /usr/bin/caffeinate -d -u -t 3600 >/dev/null 2>&1 &
 
-      # Шаг 4: Настраиваем VNC (современный режим)
+          echo "=== Готово. WindowServer не трогаем — раннер к нему привязан ==="
+
+      # ============================================================
+      # Шаг 4: Настройка VNC (современный режим, без legacy)
+      # ============================================================
       - name: Configure VNC
         run: |
           echo "=== Настройка VNC ==="
           sudo /System/Library/CoreServices/RemoteManagement/ARDAgent.app/Contents/Resources/kickstart \
             -activate -configure -access -on \
             -clientopts -setvncpw -vncpw MacOsPassword123 \
-            -restart -agent -privs -all
+            -restart -agent -privs -all || true
 
-          echo "=== Активация виртуального дисплея ==="
-          sudo defaults write /Library/Preferences/com.apple.windowserver.plist DisplayResolutionEnabled -bool true
-          sudo defaults write /Library/Preferences/com.apple.windowserver.plist DisplayResolutionAlwaysEnabled -bool true
+          echo "=== Проверяем, что VNC слушает порт ==="
+          sleep 3
+          sudo lsof -iTCP:5900 -sTCP:LISTEN -n -P || echo "VNC пока не слушает"
 
-      # Шаг 5: Диагностика — смотрим, кто владеет консолью
+      # ============================================================
+      # Шаг 5: Диагностика — кто владеет консолью и есть ли дисплей
+      # ============================================================
       - name: Diagnostics
         run: |
+          echo "===================================================="
           echo "=== Кто владеет /dev/console ==="
           stat -f%Su /dev/console || true
-          echo "=== Активные сессии ==="
-          who || true
-          echo "=== WindowServer ==="
-          ps aux | grep -i windowserver | grep -v grep || true
-          echo "=== Слушающие порты ==="
-          sudo lsof -iTCP -sTCP:LISTEN -n -P | grep -E ':(22|5900)' || true
 
+          echo "=== Активные сессии (who) ==="
+          who || true
+
+          echo "=== Процесс WindowServer ==="
+          ps aux | grep -i windowserver | grep -v grep || true
+
+          echo "=== Информация о дисплеях ==="
+          system_profiler SPDisplaysDataType || true
+
+          echo "=== Слушающие порты 22 и 5900 ==="
+          sudo lsof -iTCP -sTCP:LISTEN -n -P | grep -E ':(22|5900)' || true
+          echo "===================================================="
+
+      # ============================================================
       # Шаг 6: Выводим данные и держим workflow открытым
+      # ============================================================
       - name: Keep Alive and Display IP
         run: |
           IP=$(tailscale ip -4)
@@ -86,11 +112,14 @@ jobs:
           echo "Виртуальная машина подключена к Tailscale!"
           echo "IP: $IP"
           echo "----------------------------------------------------"
-          echo "SSH:  ssh runner@$IP"
-          echo "Пароль SSH: RunnerPass123"
+          echo "SSH:"
+          echo "  ssh runner@$IP"
+          echo "  Пароль: RunnerPass123"
           echo "----------------------------------------------------"
-          echo "VNC:  $IP:5900"
-          echo "Пароль VNC: MacOsPassword123"
+          echo "VNC (порт 5900):"
+          echo "  Адрес: $IP:5900"
+          echo "  Пароль VNC: MacOsPassword123"
           echo "===================================================="
 
+          # Держим 5.5 часов
           sleep 19800
