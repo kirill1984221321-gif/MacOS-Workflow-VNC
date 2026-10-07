@@ -1,52 +1,63 @@
 name: Private macOS GUI via Tailscale AuthKey
 
-on: 
+on:
   workflow_dispatch:
 
 jobs:
   macos-gui:
     runs-on: macos-latest
-
+    
     steps:
       - name: Checkout Repository
         uses: actions/checkout@v4
 
-      # 1. Подключаемся к Tailscale
+      # Шаг 1: Подключаемся к вашей сети Tailscale
       - name: Connect to Tailscale
         uses: tailscale/github-action@v3
         with:
           authkey: ${{ secrets.TAILSCALE_AUTH_KEY }}
 
-      # 2. Настраиваем пользователя, автологин и графику
-      - name: Configure macOS Desktop and VNC
+      # Шаг 2: Настраиваем службу VNC прямо на активную сессию runner
+      - name: Configure Headless macOS Desktop and VNC
         run: |
-          # Создаем администратора 'vncuser'
-          sudo sysadminctl -addUser vncuser -fullName "VNC User" -password "MacOsPassword123" -admin
-
-          # Включаем автоматический вход в систему для vncuser, чтобы рабочий стол грузился сам
-          sudo defaults write /Library/Preferences/com.apple.loginwindow AutoLoginUser -string "vncuser"
-          
-          # Генерируем хэш пароля для автологина (требование безопасности macOS)
-          echo "MacOsPassword123" | sudo tee /etc/kcpassword > /dev/null
-
-          # Отключаем заставку для текущего системного окружения
-          defaults write com.apple.screensaver idleTime 0
-
-          # Принудительно задаем виртуальное разрешение
-          sudo defaults write /Library/Preferences/com.apple.windowserver.plist DisplayResolutionEnabled -bool true
-
-          # Активируем службу удаленного управления VNC
-          sudo defaults write /Library/Preferences/com.apple.RemoteManagement VNCAlwaysStartOnConsole -bool true
+          echo "=== Настройка параметров подключения VNC ==="
+          # Задаем пароль 'MacOsPassword123' для самого VNC-протокола
           sudo /System/Library/CoreServices/RemoteManagement/ARDAgent.app/Contents/Resources/kickstart \
             -activate -configure -access -on \
             -clientopts -setvnclegacy -vnclegacy yes \
-            -clientopts -setvncpw -vncpw MacOsPassword123 \
-            -restart -agent -privs -all
+            -clientopts -setvncpw -vncpw MacOsPassword123
 
-          # Перезапускаем графический интерфейс, чтобы применить автологин
-          sudo killall WindowServer || true
+          # Разрешаем встроенному пользователю runner удаленное управление
+          sudo /System/Library/CoreServices/RemoteManagement/ARDAgent.app/Contents/Resources/kickstart \
+            -configure -users runner -access -on -privs -all
 
-      # 3. Удерживаем сессию активной
+          echo "=== Активация виртуального дисплея ==="
+          # Имитируем параметры физического монитора, чтобы графика не уходила в сон
+          sudo defaults write /Library/Preferences/com.apple.windowserver.plist DisplayResolutionEnabled -bool true
+          sudo defaults write /Library/Preferences/com.apple.windowserver.plist DisplayResolutionAlwaysEnabled -bool true
+          sudo defaults write /Library/Preferences/com.apple.RemoteManagement VNCAlwaysStartOnConsole -bool true
+
+          # Мягко перезапускаем агент удаленного доступа для применения настроек (БЕЗ killall WindowServer)
+          sudo /System/Library/CoreServices/RemoteManagement/ARDAgent.app/Contents/Resources/kickstart -restart -agent
+          
+          # Запускаем фоновый агент отрисовки
+          sudo /System/Library/CoreServices/RemoteManagement/ScreensharingAgent.app/Contents/MacOS/ScreensharingAgent &
+
+      # Шаг 3: Программное пробуждение виртуального дисплея (Клик и Пробел)
+      - name: Force Wake Up Virtual Display
+        run: |
+          echo "=== Установка утилиты имитации ввода ==="
+          brew install cliclick
+          
+          echo "=== Эмуляция физического присутствия за монитором ==="
+          sleep 5
+          # Двигаем мышь в центр экрана (координаты 500,500) и делаем клик, чтобы зажечь дисплей
+          cliclick c:500,500
+          # Нажимаем пробел, если система зависла на прозрачной заставке блокировки
+          cliclick kp:space
+          sleep 2
+
+      # Шаг 4: Выводим IP и держим воркфлоу открытым
       - name: Keep Alive and Display IP
         run: |
           echo "===================================================="
@@ -54,10 +65,10 @@ jobs:
           echo "Ваш IP в сети Tailscale:"
           tailscale ip -4
           echo "----------------------------------------------------"
-          echo "ДАННЫЕ ДЛЯ ПОДКЛЮЧЕНИЯ К VNC:"
-          echo "Логин: vncuser"
+          echo "ДАННЫЕ ДЛЯ ПОДКЛЮЧЕНИЯ К VNC (Порт по умолчанию 5900):"
+          echo "Логин (если спросит): runner"
           echo "Пароль: MacOsPassword123"
           echo "===================================================="
           
+          # Спим 5.5 часов
           sleep 19800
-          
