@@ -29,11 +29,10 @@ jobs:
           # Генерируем хэш пароля для автологина (требование безопасности macOS)
           echo "MacOsPassword123" | sudo tee /etc/kcpassword > /dev/null
 
-          # Отключаем режим сна дисплея и заставки
-          sudo pmset -a displaysleep 0 disksleep 0 sleep 0 suppressesassp 1
+          # Отключаем заставку для текущего системного окружения
           defaults write com.apple.screensaver idleTime 0
 
-          # Принудительно задаем виртуальное разрешение (1280x800, чтобы не перегружать сеть)
+          # Принудительно задаем виртуальное разрешение
           sudo defaults write /Library/Preferences/com.apple.windowserver.plist DisplayResolutionEnabled -bool true
 
           # Активируем службу удаленного управления VNC
@@ -44,7 +43,7 @@ jobs:
             -clientopts -setvncpw -vncpw MacOsPassword123 \
             -restart -agent -privs -all
 
-          # Перезапускаем графический интерфейс, чтобы применить автологин и настройки дисплея
+          # Перезапускаем графический интерфейс, чтобы применить автологин
           sudo killall WindowServer || true
 
       # 3. Удерживаем сессию активной
@@ -61,3 +60,4 @@ jobs:
           echo "===================================================="
           
           sleep 19800
+          
