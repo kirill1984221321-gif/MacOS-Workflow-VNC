@@ -20,106 +20,82 @@ jobs:
           authkey: ${{ secrets.TAILSCALE_AUTH_KEY }}
 
       # ============================================================
-      # Шаг 2: SSH-доступ (Вариант B — sysadminctl)
+      # Шаг 2: SSH по ключу (ключ вшит прямо в workflow)
       # ============================================================
-      - name: Configure SSH Access
+      - name: Configure SSH Access (Key Only)
         run: |
           echo "=== Включаем Remote Login (SSH) ==="
           sudo systemsetup -setremotelogin on || true
 
-          echo "=== Сбрасываем пароль пользователя runner ==="
-          sudo sysadminctl -resetPasswordFor runner -newPassword RunnerPass123 || \
-            sudo dscl . -passwd /Users/runner '' RunnerPass123 || \
-            echo "ВНИМАНИЕ: сброс пароля не удался — используйте SSH-ключ"
+          echo "=== Кладём публичный ключ для runner ==="
+          sudo mkdir -p /Users/runner/.ssh
+          sudo tee /Users/runner/.ssh/authorized_keys > /dev/null <<'EOF'
+          ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIGlPfqVv+oWRt0HWLJrfZ5ngaVasLIkNvjhAAC+5b2wd u0_a1@localhost
+          EOF
+          sudo chmod 700 /Users/runner/.ssh
+          sudo chmod 600 /Users/runner/.ssh/authorized_keys
+          sudo chown -R runner:staff /Users/runner/.ssh
 
-          echo "=== Проверяем пользователя ==="
-          id runner || true
+          echo "=== Проверяем содержимое ==="
+          sudo cat /Users/runner/.ssh/authorized_keys
 
-          echo "=== SSH готов. Логин: runner, Пароль: RunnerPass123 ==="
+          echo "=== Проверяем отпечаток ==="
+          sudo ssh-keygen -lf /Users/runner/.ssh/authorized_keys || true
+
+          echo "=== SSH по ключу настроен ==="
 
       # ============================================================
-      # Шаг 3: Настройка графической сессии (БЕЗ killall WindowServer!)
+      # Шаг 3: Настройка графической сессии
       # ============================================================
       - name: Force GUI Session for VNC
         run: |
-          echo "=== Отключаем блокировку экрана ==="
           sudo defaults write /Library/Preferences/com.apple.screensaver askForPassword -int 0
           sudo defaults write /Library/Preferences/com.apple.screensaver askForPasswordDelay -int 0
-
-          echo "=== Отключаем сон дисплея и системы ==="
           sudo pmset -a displaysleep 0 sleep 0 disablesleep 1 || true
-
-          echo "=== Включаем автологин для runner ==="
           sudo defaults write /Library/Preferences/com.apple.loginwindow autoLoginUser runner
           sudo defaults write /Library/Preferences/com.apple.loginwindow autoLoginUserUID 501
-
-          echo "=== VNC всегда стартует на консоли ==="
           sudo defaults write /Library/Preferences/com.apple.RemoteManagement VNCAlwaysStartOnConsole -bool true
-
-          echo "=== Активация виртуального дисплея ==="
           sudo defaults write /Library/Preferences/com.apple.windowserver.plist DisplayResolutionEnabled -bool true
           sudo defaults write /Library/Preferences/com.apple.windowserver.plist DisplayResolutionAlwaysEnabled -bool true
-
-          echo "=== Запускаем caffeinate против засыпания ==="
           nohup /usr/bin/caffeinate -d -u -t 3600 >/dev/null 2>&1 &
 
-          echo "=== Готово. WindowServer не трогаем — раннер к нему привязан ==="
-
       # ============================================================
-      # Шаг 4: Настройка VNC (современный режим, без legacy)
+      # Шаг 4: Настройка VNC
       # ============================================================
       - name: Configure VNC
         run: |
-          echo "=== Настройка VNC ==="
           sudo /System/Library/CoreServices/RemoteManagement/ARDAgent.app/Contents/Resources/kickstart \
             -activate -configure -access -on \
             -clientopts -setvncpw -vncpw MacOsPassword123 \
             -restart -agent -privs -all || true
-
-          echo "=== Проверяем, что VNC слушает порт ==="
           sleep 3
           sudo lsof -iTCP:5900 -sTCP:LISTEN -n -P || echo "VNC пока не слушает"
 
       # ============================================================
-      # Шаг 5: Диагностика — кто владеет консолью и есть ли дисплей
+      # Шаг 5: Диагностика
       # ============================================================
       - name: Diagnostics
         run: |
-          echo "===================================================="
           echo "=== Кто владеет /dev/console ==="
           stat -f%Su /dev/console || true
-
-          echo "=== Активные сессии (who) ==="
+          echo "=== Активные сессии ==="
           who || true
-
-          echo "=== Процесс WindowServer ==="
+          echo "=== WindowServer ==="
           ps aux | grep -i windowserver | grep -v grep || true
-
-          echo "=== Информация о дисплеях ==="
+          echo "=== Дисплеи ==="
           system_profiler SPDisplaysDataType || true
-
-          echo "=== Слушающие порты 22 и 5900 ==="
+          echo "=== Порты 22 и 5900 ==="
           sudo lsof -iTCP -sTCP:LISTEN -n -P | grep -E ':(22|5900)' || true
-          echo "===================================================="
 
       # ============================================================
-      # Шаг 6: Выводим данные и держим workflow открытым
+      # Шаг 6: Данные для подключения и удержание
       # ============================================================
       - name: Keep Alive and Display IP
         run: |
           IP=$(tailscale ip -4)
           echo "===================================================="
-          echo "Виртуальная машина подключена к Tailscale!"
           echo "IP: $IP"
-          echo "----------------------------------------------------"
-          echo "SSH:"
-          echo "  ssh runner@$IP"
-          echo "  Пароль: RunnerPass123"
-          echo "----------------------------------------------------"
-          echo "VNC (порт 5900):"
-          echo "  Адрес: $IP:5900"
-          echo "  Пароль VNC: MacOsPassword123"
+          echo "SSH: ssh -i ~/.ssh/gh_runner -o StrictHostKeyChecking=no runner@$IP"
+          echo "VNC: $IP:5900  пароль: MacOsPassword123"
           echo "===================================================="
-
-          # Держим 5.5 часов
           sleep 19800
