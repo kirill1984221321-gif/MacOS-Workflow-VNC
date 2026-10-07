@@ -17,47 +17,53 @@ jobs:
         with:
           authkey: ${{ secrets.TAILSCALE_AUTH_KEY }}
 
-      # Шаг 2: Настраиваем службу VNC прямо на активную сессию runner
-      - name: Configure Headless macOS Desktop and VNC
+      # Шаг 2: Настраиваем SSH и пароль для пользователя runner
+      - name: Configure SSH Access
         run: |
-          echo "=== Настройка параметров подключения VNC ==="
-          # Задаем пароль 'MacOsPassword123' для самого VNC-протокола
+          echo "=== Включаем SSH ==="
+          sudo systemsetup -setremotelogin on
+          
+          echo "=== Устанавливаем пароль для пользователя runner ==="
+          sudo dscl . -passwd /Users/runner RunnerPass123
+          
+          echo "=== SSH настроен. Пользователь: runner, Пароль: RunnerPass123 ==="
+
+      # Шаг 3: Принудительно запускаем графическую сессию (исправление тёмного экрана)
+      - name: Force GUI Session for VNC
+        run: |
+          echo "=== Отключаем блокировку экрана и сон ==="
+          sudo defaults write /Library/Preferences/com.apple.screensaver askForPassword -int 0
+          sudo defaults write /Library/Preferences/com.apple.screensaver askForPasswordDelay -int 0
+          sudo pmset -a displaysleep 0 sleep 0 disablesleep 1
+          
+          echo "=== Включаем автологин для runner ==="
+          sudo defaults write /Library/Preferences/com.apple.loginwindow autoLoginUser runner
+          sudo defaults write /Library/Preferences/com.apple.loginwindow autoLoginUserUID 501
+          
+          echo "=== Перезапускаем WindowServer для применения настроек ==="
+          sudo killall -HUP WindowServer || true
+          sleep 15
+          
+          echo "=== VNC всегда стартует на консоли ==="
+          sudo defaults write /Library/Preferences/com.apple.RemoteManagement VNCAlwaysStartOnConsole -bool true
+          
+          echo "=== Запускаем caffeinate для предотвращения сна дисплея ==="
+          /usr/bin/caffeinate -d -u -t 3600 &
+
+      # Шаг 4: Настраиваем VNC (современный режим, без legacy)
+      - name: Configure VNC
+        run: |
+          echo "=== Настройка VNC ==="
           sudo /System/Library/CoreServices/RemoteManagement/ARDAgent.app/Contents/Resources/kickstart \
             -activate -configure -access -on \
-            -clientopts -setvnclegacy -vnclegacy yes \
-            -clientopts -setvncpw -vncpw MacOsPassword123
-
-          # Разрешаем встроенному пользователю runner удаленное управление
-          sudo /System/Library/CoreServices/RemoteManagement/ARDAgent.app/Contents/Resources/kickstart \
-            -configure -users runner -access -on -privs -all
-
+            -clientopts -setvncpw -vncpw MacOsPassword123 \
+            -restart -agent -privs -all
+          
           echo "=== Активация виртуального дисплея ==="
-          # Имитируем параметры физического монитора, чтобы графика не уходила в сон
           sudo defaults write /Library/Preferences/com.apple.windowserver.plist DisplayResolutionEnabled -bool true
           sudo defaults write /Library/Preferences/com.apple.windowserver.plist DisplayResolutionAlwaysEnabled -bool true
-          sudo defaults write /Library/Preferences/com.apple.RemoteManagement VNCAlwaysStartOnConsole -bool true
 
-          # Мягко перезапускаем агент удаленного доступа для применения настроек (БЕЗ killall WindowServer)
-          sudo /System/Library/CoreServices/RemoteManagement/ARDAgent.app/Contents/Resources/kickstart -restart -agent
-          
-          # Запускаем фоновый агент отрисовки
-          sudo /System/Library/CoreServices/RemoteManagement/ScreensharingAgent.app/Contents/MacOS/ScreensharingAgent &
-
-      # Шаг 3: Программное пробуждение виртуального дисплея (Клик и Пробел)
-      - name: Force Wake Up Virtual Display
-        run: |
-          echo "=== Установка утилиты имитации ввода ==="
-          brew install cliclick
-          
-          echo "=== Эмуляция физического присутствия за монитором ==="
-          sleep 5
-          # Двигаем мышь в центр экрана (координаты 500,500) и делаем клик, чтобы зажечь дисплей
-          cliclick c:500,500
-          # Нажимаем пробел, если система зависла на прозрачной заставке блокировки
-          cliclick kp:space
-          sleep 2
-
-      # Шаг 4: Выводим IP и держим воркфлоу открытым
+      # Шаг 5: Выводим данные для подключения и держим workflow открытым
       - name: Keep Alive and Display IP
         run: |
           echo "===================================================="
@@ -65,9 +71,13 @@ jobs:
           echo "Ваш IP в сети Tailscale:"
           tailscale ip -4
           echo "----------------------------------------------------"
-          echo "ДАННЫЕ ДЛЯ ПОДКЛЮЧЕНИЯ К VNC (Порт по умолчанию 5900):"
-          echo "Логин (если спросит): runner"
-          echo "Пароль: MacOsPassword123"
+          echo "ДАННЫЕ ДЛЯ ПОДКЛЮЧЕНИЯ ПО SSH:"
+          echo "Команда: ssh runner@$(tailscale ip -4)"
+          echo "Пароль: RunnerPass123"
+          echo "----------------------------------------------------"
+          echo "ДАННЫЕ ДЛЯ ПОДКЛЮЧЕНИЯ К VNC:"
+          echo "Адрес: $(tailscale ip -4):5900"
+          echo "Пароль VNC: MacOsPassword123"
           echo "===================================================="
           
           # Спим 5.5 часов
