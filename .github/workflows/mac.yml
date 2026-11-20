@@ -25,35 +25,31 @@ jobs:
           sudo tailscale up --authkey="$TS_AUTHKEY" --accept-routes
 
       # ============================================================
-      # Шаг 2: SSH по ключу и пароль 2015 для runner (через dscl)
+      # Шаг 2: Создаём админа Kirill с паролем 2015 и настраиваем SSH
       # ============================================================
-      - name: Configure SSH Access and Runner Password
+      - name: Create Admin User and Configure SSH
         run: |
           echo "=== Включаем Remote Login (SSH) ==="
           sudo systemsetup -setremotelogin on || true
 
-          echo "=== Устанавливаем пароль 2015 для пользователя runner через dscl ==="
-          sudo dscl . -passwd /Users/runner 2015
+          echo "=== Создаём пользователя Kirill с паролем 2015 через sysadminctl ==="
+          sudo sysadminctl -addUser Kirill -fullName "Kirill" -password 2015 -admin
 
-          echo "=== Кладём публичный ключ для runner ==="
-          sudo mkdir -p /Users/runner/.ssh
-          sudo tee /Users/runner/.ssh/authorized_keys > /dev/null <<'EOF'
+          echo "=== Кладём публичный ключ для runner и Kirill ==="
+          for U in runner Kirill; do
+            sudo mkdir -p /Users/$U/.ssh
+            sudo tee /Users/$U/.ssh/authorized_keys > /dev/null <<'EOF'
           ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIGlPfqVv+oWRt0HWLJrfZ5ngaVasLIkNvjhAAC+5b2wd u0_a1@localhost
           EOF
-          sudo chmod 700 /Users/runner/.ssh
-          sudo chmod 600 /Users/runner/.ssh/authorized_keys
-          sudo chown -R runner:staff /Users/runner/.ssh
+            sudo chmod 700 /Users/$U/.ssh
+            sudo chmod 600 /Users/$U/.ssh/authorized_keys
+            sudo chown -R $U:staff /Users/$U/.ssh
+          done
 
-          echo "=== Проверяем содержимое ==="
-          sudo cat /Users/runner/.ssh/authorized_keys
-
-          echo "=== Проверяем отпечаток ==="
-          sudo ssh-keygen -lf /Users/runner/.ssh/authorized_keys || true
-
-          echo "=== SSH и пароль настроены ==="
+          echo "=== SSH и пользователь Kirill настроены ==="
 
       # ============================================================
-      # Шаг 3: Настройка графической сессии (без автологина)
+      # Шаг 3: Настройка графической сессии
       # ============================================================
       - name: Force GUI Session for VNC
         run: |
@@ -70,7 +66,7 @@ jobs:
       # ============================================================
       - name: Configure VNC
         run: |
-          # Принудительно записываем XOR-хеш пароля 2015 для legacy VNC-клиентов
+          # Записываем XOR-хеш пароля 2015 для legacy VNC-клиентов
           echo "2015" | perl -we 'BEGIN { @k = unpack "C*", pack "H*", "1734516E8BA8C5E2FF1C39567390ADCA"}; $_ = <>; chomp; s/^(.{8}).*/$1/; @p = unpack "C*", $_; foreach (@k) { printf "%02X", $_ ^ (shift @p || 0) }; print "\n"' | sudo tee /Library/Preferences/com.apple.VNCSettings.txt > /dev/null
 
           sudo /System/Library/CoreServices/RemoteManagement/ARDAgent.app/Contents/Resources/kickstart \
@@ -106,7 +102,7 @@ jobs:
           IP=$(tailscale ip -4)
           echo "===================================================="
           echo "IP: $IP"
-          echo "SSH: ssh -i ~/.ssh/gh_runner -o StrictHostKeyChecking=no runner@$IP"
-          echo "VNC: $IP:5900  логин: runner  пароль: 2015"
+          echo "SSH: ssh -i ~/.ssh/gh_runner -o StrictHostKeyChecking=no Kirill@$IP"
+          echo "VNC: $IP:5900  логин: Kirill  пароль: 2015"
           echo "===================================================="
           sleep 21500
