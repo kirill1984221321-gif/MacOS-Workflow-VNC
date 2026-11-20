@@ -6,6 +6,7 @@ on:
 jobs:
   macos-gui:
     runs-on: macos-latest
+    timeout-minutes: 360
 
     steps:
       - name: Checkout Repository
@@ -20,12 +21,15 @@ jobs:
           authkey: ${{ secrets.TAILSCALE_AUTH_KEY }}
 
       # ============================================================
-      # Шаг 2: SSH по ключу (ключ вшит прямо в workflow)
+      # Шаг 2: SSH по ключу и пароль для пользователя runner
       # ============================================================
-      - name: Configure SSH Access (Key Only)
+      - name: Configure SSH Access and Runner Password
         run: |
           echo "=== Включаем Remote Login (SSH) ==="
           sudo systemsetup -setremotelogin on || true
+
+          echo "=== Устанавливаем пароль 2015 для пользователя runner ==="
+          sudo sysadminctl -resetPasswordFor runner -newPassword 2015 || sudo dscl . -passwd /Users/runner 2015
 
           echo "=== Кладём публичный ключ для runner ==="
           sudo mkdir -p /Users/runner/.ssh
@@ -42,22 +46,20 @@ jobs:
           echo "=== Проверяем отпечаток ==="
           sudo ssh-keygen -lf /Users/runner/.ssh/authorized_keys || true
 
-          echo "=== SSH по ключу настроен ==="
+          echo "=== SSH и пароль настроены ==="
 
       # ============================================================
-      # Шаг 3: Настройка графической сессии
+      # Шаг 3: Настройка графической сессии (без автологина)
       # ============================================================
       - name: Force GUI Session for VNC
         run: |
           sudo defaults write /Library/Preferences/com.apple.screensaver askForPassword -int 0
           sudo defaults write /Library/Preferences/com.apple.screensaver askForPasswordDelay -int 0
           sudo pmset -a displaysleep 0 sleep 0 disablesleep 1 || true
-          sudo defaults write /Library/Preferences/com.apple.loginwindow autoLoginUser runner
-          sudo defaults write /Library/Preferences/com.apple.loginwindow autoLoginUserUID 501
           sudo defaults write /Library/Preferences/com.apple.RemoteManagement VNCAlwaysStartOnConsole -bool true
           sudo defaults write /Library/Preferences/com.apple.windowserver.plist DisplayResolutionEnabled -bool true
           sudo defaults write /Library/Preferences/com.apple.windowserver.plist DisplayResolutionAlwaysEnabled -bool true
-          nohup /usr/bin/caffeinate -d -u -t 3600 >/dev/null 2>&1 &
+          nohup /usr/bin/caffeinate -d -u -t 21600 >/dev/null 2>&1 &
 
       # ============================================================
       # Шаг 4: Настройка VNC
@@ -65,8 +67,10 @@ jobs:
       - name: Configure VNC
         run: |
           sudo /System/Library/CoreServices/RemoteManagement/ARDAgent.app/Contents/Resources/kickstart \
-            -activate -configure -access -on \
-            -clientopts -setvncpw -vncpw MacOsPassword123 \
+            -activate \
+            -configure -access -on \
+            -clientopts -setvnclegacy -vnclegacy yes \
+            -clientopts -setvncpw -vncpw 2015 \
             -restart -agent -privs -all || true
           sleep 3
           sudo lsof -iTCP:5900 -sTCP:LISTEN -n -P || echo "VNC пока не слушает"
@@ -88,7 +92,7 @@ jobs:
           sudo lsof -iTCP -sTCP:LISTEN -n -P | grep -E ':(22|5900)' || true
 
       # ============================================================
-      # Шаг 6: Данные для подключения и удержание
+      # Шаг 6: Данные для подключения и удержание (6 часов)
       # ============================================================
       - name: Keep Alive and Display IP
         run: |
@@ -96,6 +100,6 @@ jobs:
           echo "===================================================="
           echo "IP: $IP"
           echo "SSH: ssh -i ~/.ssh/gh_runner -o StrictHostKeyChecking=no runner@$IP"
-          echo "VNC: $IP:5900  пароль: MacOsPassword123"
+          echo "VNC: $IP:5900  логин: runner  пароль: 2015"
           echo "===================================================="
-          sleep 19800
+          sleep 21500
