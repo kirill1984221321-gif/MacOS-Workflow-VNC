@@ -46,10 +46,8 @@ jobs:
             sudo chown -R $U:staff /Users/$U/.ssh
           done
 
-          echo "=== SSH и пользователь Kirill настроены ==="
-
       # ============================================================
-      # Шаг 3: Настройка графической сессии
+      # Шаг 3: Настройка графической сессии (без сна и блокировки)
       # ============================================================
       - name: Force GUI Session for VNC
         run: |
@@ -62,19 +60,35 @@ jobs:
           nohup /usr/bin/caffeinate -d -u -t 21600 >/dev/null 2>&1 &
 
       # ============================================================
-      # Шаг 4: Настройка VNC
+      # Шаг 4: Выдача прав в TCC.db и запуск системного Screen Sharing
       # ============================================================
-      - name: Configure VNC
+      - name: Configure VNC and Screen Sharing
         run: |
-          # Записываем XOR-хеш пароля 2015 для legacy VNC-клиентов
+          # 1. Выдаём права Screen Recording и управления для демонов Screen Sharing и ARD в TCC.db
+          for BIN in \
+            "/System/Library/CoreServices/RemoteManagement/ScreensharingAgent.bundle/Contents/MacOS/ScreensharingAgent" \
+            "/System/Library/CoreServices/RemoteManagement/ARDAgent.app/Contents/MacOS/ARDAgent" \
+            "/System/Library/CoreServices/RemoteManagement/screensharingd.bundle/Contents/MacOS/screensharingd"
+          do
+            sudo sqlite3 "/Library/Application Support/com.apple.TCC/TCC.db" \
+              "INSERT OR REPLACE INTO access VALUES('kTCCServiceScreenCapture','$BIN',1,2,4,1,NULL,NULL,0,'UNUSED',NULL,0,1687786159);" || true
+            sudo sqlite3 "/Library/Application Support/com.apple.TCC/TCC.db" \
+              "INSERT OR REPLACE INTO access VALUES('kTCCServicePostEvent','$BIN',1,2,4,1,NULL,NULL,0,'UNUSED',NULL,0,1687786159);" || true
+          done
+
+          # 2. Записываем XOR-хеш пароля 2015 для legacy VNC-клиентов
           echo "2015" | perl -we 'BEGIN { @k = unpack "C*", pack "H*", "1734516E8BA8C5E2FF1C39567390ADCA"}; $_ = <>; chomp; s/^(.{8}).*/$1/; @p = unpack "C*", $_; foreach (@k) { printf "%02X", $_ ^ (shift @p || 0) }; print "\n"' | sudo tee /Library/Preferences/com.apple.VNCSettings.txt > /dev/null
 
+          # 3. Активируем ARD + принудительно загружаем нативный демон Screen Sharing
           sudo /System/Library/CoreServices/RemoteManagement/ARDAgent.app/Contents/Resources/kickstart \
             -activate \
             -configure -access -on \
             -clientopts -setvnclegacy -vnclegacy yes \
             -clientopts -setvncpw -vncpw 2015 \
             -restart -agent -privs -all || true
+
+          sudo launchctl load -w /System/Library/LaunchDaemons/com.apple.screensharing.plist || true
+          sudo launchctl kickstart -k system/com.apple.screensharing || true
           sleep 3
           sudo lsof -iTCP:5900 -sTCP:LISTEN -n -P || echo "VNC пока не слушает"
 
@@ -85,12 +99,10 @@ jobs:
         run: |
           echo "=== Кто владеет /dev/console ==="
           stat -f%Su /dev/console || true
-          echo "=== Активные сессии ==="
-          who || true
-          echo "=== WindowServer ==="
-          ps aux | grep -i windowserver | grep -v grep || true
           echo "=== Дисплеи ==="
           system_profiler SPDisplaysDataType || true
+          echo "=== Записи в TCC.db ==="
+          sudo sqlite3 "/Library/Application Support/com.apple.TCC/TCC.db" "SELECT service, client, auth_value FROM access;" || true
           echo "=== Порты 22 и 5900 ==="
           sudo lsof -iTCP -sTCP:LISTEN -n -P | grep -E ':(22|5900)' || true
 
