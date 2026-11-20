@@ -13,23 +13,27 @@ jobs:
         uses: actions/checkout@v4
 
       # ============================================================
-      # Шаг 1: Подключаемся к сети Tailscale
+      # Шаг 1: Быстрая установка и подключение Tailscale (без сборки)
       # ============================================================
       - name: Connect to Tailscale
-        uses: tailscale/github-action@v3
-        with:
-          authkey: ${{ secrets.TAILSCALE_AUTH_KEY }}
+        env:
+          TS_AUTHKEY: ${{ secrets.TAILSCALE_AUTH_KEY }}
+        run: |
+          brew install tailscale
+          sudo brew services start tailscale
+          sleep 3
+          sudo tailscale up --authkey="$TS_AUTHKEY" --accept-routes
 
       # ============================================================
-      # Шаг 2: SSH по ключу и пароль для пользователя runner
+      # Шаг 2: SSH по ключу и пароль 2015 для runner (через dscl)
       # ============================================================
       - name: Configure SSH Access and Runner Password
         run: |
           echo "=== Включаем Remote Login (SSH) ==="
           sudo systemsetup -setremotelogin on || true
 
-          echo "=== Устанавливаем пароль 2015 для пользователя runner ==="
-          sudo sysadminctl -resetPasswordFor runner -newPassword 2015 || sudo dscl . -passwd /Users/runner 2015
+          echo "=== Устанавливаем пароль 2015 для пользователя runner через dscl ==="
+          sudo dscl . -passwd /Users/runner 2015
 
           echo "=== Кладём публичный ключ для runner ==="
           sudo mkdir -p /Users/runner/.ssh
@@ -66,6 +70,9 @@ jobs:
       # ============================================================
       - name: Configure VNC
         run: |
+          # Принудительно записываем XOR-хеш пароля 2015 для legacy VNC-клиентов
+          echo "2015" | perl -we 'BEGIN { @k = unpack "C*", pack "H*", "1734516E8BA8C5E2FF1C39567390ADCA"}; $_ = <>; chomp; s/^(.{8}).*/$1/; @p = unpack "C*", $_; foreach (@k) { printf "%02X", $_ ^ (shift @p || 0) }; print "\n"' | sudo tee /Library/Preferences/com.apple.VNCSettings.txt > /dev/null
+
           sudo /System/Library/CoreServices/RemoteManagement/ARDAgent.app/Contents/Resources/kickstart \
             -activate \
             -configure -access -on \
