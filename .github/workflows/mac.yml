@@ -47,7 +47,7 @@ jobs:
           done
 
       # ============================================================
-      # Шаг 3: Настройка графической сессии (без сна и блокировки)
+      # Шаг 3: Настройка графической сессии (без дисплея и сна)
       # ============================================================
       - name: Force GUI Session for VNC
         run: |
@@ -60,34 +60,36 @@ jobs:
           nohup /usr/bin/caffeinate -d -u -t 21600 >/dev/null 2>&1 &
 
       # ============================================================
-      # Шаг 4: Выдача прав в TCC.db и запуск системного Screen Sharing
+      # Шаг 4: Включение Screen Sharing через System Settings (osascript) + VNC
       # ============================================================
-      - name: Configure VNC and Screen Sharing
+      - name: Enable Screen Sharing via System Settings and Configure VNC
         run: |
-          # 1. Выдаём права Screen Recording и управления для демонов Screen Sharing и ARD в TCC.db
-          for BIN in \
-            "/System/Library/CoreServices/RemoteManagement/ScreensharingAgent.bundle/Contents/MacOS/ScreensharingAgent" \
-            "/System/Library/CoreServices/RemoteManagement/ARDAgent.app/Contents/MacOS/ARDAgent" \
-            "/System/Library/CoreServices/RemoteManagement/screensharingd.bundle/Contents/MacOS/screensharingd"
-          do
-            sudo sqlite3 "/Library/Application Support/com.apple.TCC/TCC.db" \
-              "INSERT OR REPLACE INTO access VALUES('kTCCServiceScreenCapture','$BIN',1,2,4,1,NULL,NULL,0,'UNUSED',NULL,0,1687786159);" || true
-            sudo sqlite3 "/Library/Application Support/com.apple.TCC/TCC.db" \
-              "INSERT OR REPLACE INTO access VALUES('kTCCServicePostEvent','$BIN',1,2,4,1,NULL,NULL,0,'UNUSED',NULL,0,1687786159);" || true
-          done
-
-          # 2. Записываем XOR-хеш пароля 2015 для legacy VNC-клиентов
+          # 1. Записываем XOR-хеш пароля 2015 для legacy VNC-клиентов
           echo "2015" | perl -we 'BEGIN { @k = unpack "C*", pack "H*", "1734516E8BA8C5E2FF1C39567390ADCA"}; $_ = <>; chomp; s/^(.{8}).*/$1/; @p = unpack "C*", $_; foreach (@k) { printf "%02X", $_ ^ (shift @p || 0) }; print "\n"' | sudo tee /Library/Preferences/com.apple.VNCSettings.txt > /dev/null
 
-          # 3. Активируем ARD + принудительно загружаем нативный демон Screen Sharing
+          # 2. Открываем раздел Общий доступ (Sharing) в Параметрах системы и включаем Screen Sharing
+          open "x-apple.systempreferences:com.apple.Sharing-Settings.extension"
+          sleep 4
+          osascript <<'EOF' || true
+          tell application "System Events"
+            tell process "System Settings"
+              repeat with cb in every checkbox of group 1 of scroll area 1 of group 1 of group 2 of splitter group 1 of group 1 of window 1
+                if (name of cb contains "Screen Sharing") or (description of cb contains "Screen Sharing") then
+                  if value of cb is 0 then click cb
+                end if
+              end repeat
+            end tell
+          end tell
+          EOF
+          sleep 2
+
+          # 3. Задаём legacy-пароль VNC и права доступа
           sudo /System/Library/CoreServices/RemoteManagement/ARDAgent.app/Contents/Resources/kickstart \
-            -activate \
             -configure -access -on \
             -clientopts -setvnclegacy -vnclegacy yes \
             -clientopts -setvncpw -vncpw 2015 \
-            -restart -agent -privs -all || true
+            -privs -all || true
 
-          sudo launchctl load -w /System/Library/LaunchDaemons/com.apple.screensharing.plist || true
           sudo launchctl kickstart -k system/com.apple.screensharing || true
           sleep 3
           sudo lsof -iTCP:5900 -sTCP:LISTEN -n -P || echo "VNC пока не слушает"
@@ -101,8 +103,6 @@ jobs:
           stat -f%Su /dev/console || true
           echo "=== Дисплеи ==="
           system_profiler SPDisplaysDataType || true
-          echo "=== Записи в TCC.db ==="
-          sudo sqlite3 "/Library/Application Support/com.apple.TCC/TCC.db" "SELECT service, client, auth_value FROM access;" || true
           echo "=== Порты 22 и 5900 ==="
           sudo lsof -iTCP -sTCP:LISTEN -n -P | grep -E ':(22|5900)' || true
 
